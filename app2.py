@@ -1,141 +1,195 @@
-import tkinter as tk
-from tkinter import messagebox
-import webbrowser
-from PIL import ImageGrab
+from datetime import datetime
+import sys
 import os
+import subprocess
+import pyautogui
+from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QWidget, QVBoxLayout, QTextEdit, \
+    QLineEdit, QPushButton, QMessageBox
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QRect, QPoint
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-import time
+from selenium.webdriver.common.by import By
+from PIL import ImageGrab
+import cv2
+import numpy as np
+import csv
+import pyperclip  # Для работы с буфером обмена
 
-class CoordinatesApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Google Maps Coordinates")
+prefix = ""
+village_name = ""
 
-        self.entries = []
-        self.add_coordinate_entry()
+class ScreenshotApp(QWidget):
+    def __init__(self, tray_icon, log_widget, prefix_input, village_input):
+        super().__init__()
+        self.tray_icon = tray_icon
+        self.driver = None
+        self.top_left_coords = ""
+        self.bottom_right_coords = ""
+        self.log_widget = log_widget
+        self.prefix_input = prefix_input
+        self.village_input = village_input
+        self.selection_rect = None
+        self.setup_driver()
 
-        # Кнопка для открытия Google Maps
-        self.submit_button = tk.Button(root, text="Open Google Maps", command=self.open_google_maps_with_locations)
-        self.submit_button.grid(row=8, column=0, columnspan=2, pady=10)
-
-        # Кнопка для создания скриншота
-        self.screenshot_button = tk.Button(root, text="Take Screenshot", command=self.take_screenshot)
-        self.screenshot_button.grid(row=9, column=0, columnspan=2, pady=10)
-
-        # Автоматическое открытие Google Maps при запуске
-        self.open_google_maps_with_locations()
-
-    def add_coordinate_entry(self):
-        """Добавляет новую строку для ввода координат, если их меньше 7."""
-        row = len(self.entries)
-        tk.Label(self.root, text=f"Coordinates {row + 1} (latitude, longitude):").grid(row=row, column=0, padx=10, pady=10)
-        entry = tk.Entry(self.root, width=50)
-        entry.grid(row=row, column=1, padx=10, pady=10)
-        self.entries.append(entry)
-
-        # Удаление предыдущей кнопки "Add Another Coordinate", если она существует
-        if hasattr(self, 'add_button'):
-            self.add_button.grid_forget()
-
-        # Добавление новой кнопки, если есть место для добавления еще одной строки
-        if len(self.entries) < 7:
-            self.add_button = tk.Button(self.root, text="Add Another Coordinate", command=self.add_coordinate_entry)
-            self.add_button.grid(row=row + 1, column=0, columnspan=2, pady=10)
+    def show_popup(self, title, message):
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec_()
 
     def setup_driver(self):
-        """Настраивает WebDriver с указанным адресом отладчика."""
         options = Options()
         options.add_experimental_option("debuggerAddress", "localhost:9222")
-        chromedriver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chromedriver.exe')
-        print(f"Using chromedriver path: {chromedriver_path}")  # Вывод пути для проверки
+        self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+
+    def log(self, message):
+        self.log_widget.append(message)
+        self.log_widget.verticalScrollBar().setValue(self.log_widget.verticalScrollBar().maximum())
+
+    def copy_to_clipboard(self, text):
+        pyperclip.copy(text)
+        self.log(f"Copied to clipboard: {text}")
+
+    def get_coords_from_maps(self):
         try:
-            self.driver = webdriver.Chrome(service=Service(chromedriver_path), options=options)
+            # Пример кода для получения координат (измените в соответствии с вашим интерфейсом)
+            element = self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div')
+            coords = element.text
+            self.copy_to_clipboard(coords)
+            return coords
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to initialize WebDriver: {str(e)}")
-            print(f"Error initializing WebDriver: {str(e)}")  # Дополнительный вывод в консоль
+            self.log(f"Error: {e}")
+            return "Coordinates not found"
 
-    def open_google_maps_with_locations(self):
+    def record_coordinates(self):
         try:
-            coord_list = []
-            for entry in self.entries:
-                coords = entry.get().strip()
-                if coords:
-                    coord_list.append(coords)
+            # Копируем координаты топ-левой и нижней правой точек
+            self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div').click()
+            self.top_left_coords = self.get_coords_from_maps()
+            self.log(f"Top-left coordinates: {self.top_left_coords}")
 
-            # Проверка корректности каждого набора координат
-            for coord in coord_list:
-                parts = coord.split(',')
-                if len(parts) != 2:
-                    raise ValueError("Each coordinate must be in the format 'latitude,longitude'.")
+            self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div').click()
+            self.bottom_right_coords = self.get_coords_from_maps()
+            self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
 
-                latitude = parts[0].strip()
-                longitude = parts[1].strip()
+            # Сохраняем координаты в CSV файл
+            self.save_coordinates()
 
-                try:
-                    latitude = float(latitude)
-                    longitude = float(longitude)
-                except ValueError:
-                    raise ValueError("Latitude and longitude must be valid numbers.")
+            # Автоматически захватываем снимок экрана в записанной области
+            self.capture_screenshot_in_area()
 
-            # Формирование URL для отображения на карте
-            markers = '|'.join([f"{lat},{lng}" for lat, lng in (coord.split(',') for coord in coord_list)])
-            url = f"https://www.google.com/maps/dir/?api=1&markers={markers}"
-            webbrowser.open(url)
-        except ValueError as e:
-            messagebox.showerror("Input Error", str(e))
+        except Exception as e:
+            self.show_popup("Error", f"An error occurred: {str(e)}")
 
-    def take_screenshot(self):
-        if len(self.entries) < 2:
-            messagebox.showerror("Error", "You must enter at least 2 coordinates to take a screenshot.")
-            return
-        
+    def save_coordinates(self):
+        base_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'MapsMarkup')
+        village_name = self.village_input.text().strip()
+        save_path = os.path.join(base_folder, prefix, village_name)
+        os.makedirs(save_path, exist_ok=True)
+
+        csv_path = os.path.join(save_path, 'coordinates.csv')
+        with open(csv_path, mode='w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Top-Left Coordinates', 'Bottom-Right Coordinates'])
+            writer.writerow([self.top_left_coords, self.bottom_right_coords])
+
+        self.show_popup(
+            "Coordinates saved",
+            f"Coordinates saved in {csv_path}"
+        )
+
+    def capture_screenshot_in_area(self):
         try:
-            # Получение списка координат
-            coord_list = []
-            for entry in self.entries:
-                coords = entry.get().strip()
-                if coords:
-                    coord_list.append(coords)
-
-            # Настройка WebDriver
-            self.setup_driver()
-
-            if not hasattr(self, 'driver'):
+            if not self.top_left_coords or not self.bottom_right_coords:
+                self.show_popup("Error", "Coordinates are not set.")
                 return
 
-            # Открываем Google Maps с координатами
-            markers = '|'.join([f"{lat},{lng}" for lat, lng in (coord.split(',') for coord in coord_list)])
-            url = f"https://www.google.com/maps/dir/?api=1&markers={markers}"
-            self.driver.get(url)
+            # Преобразуем координаты из строки в числа с плавающей запятой
+            lat_top_left, lon_top_left = map(float, self.top_left_coords.split(','))
+            lat_bottom_right, lon_bottom_right = map(float, self.bottom_right_coords.split(','))
 
-            # Ожидаем загрузку карты
-            time.sleep(5)  # Задержка для полной загрузки карты
+            # Определяем область для снимка экрана
+            x1, y1 = 100, 100  # Временные значения для верхнего левого угла
+            x2, y2 = 800, 600  # Временные значения для нижнего правого угла
 
-            # Папка для сохранения скриншота
-            folder_path = os.path.join(os.getcwd(), 'MapsMarkup')
-            os.makedirs(folder_path, exist_ok=True)
-            
-            # Полный путь для сохранения файла
-            screenshot_path = os.path.join(folder_path, 'google_maps_screenshot.png')
+            # Захватываем снимок экрана указанной области
+            screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
 
-            # Скриншот
-            screenshot = self.driver.get_screenshot_as_file(screenshot_path)
+            # Сохраняем снимок экрана
+            base_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'MapsMarkup')
+            village_name = self.village_input.text().strip()
+            save_path = os.path.join(base_folder, prefix, village_name)
+            os.makedirs(save_path, exist_ok=True)
 
-            # Проверка успешного создания скриншота
-            if screenshot:
-                messagebox.showinfo("Screenshot", f"Screenshot saved as {screenshot_path}")
-            else:
-                messagebox.showerror("Error", "Failed to take screenshot.")
+            screenshot_filename = f"screenshot_{prefix}_{village_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            screenshot_path = os.path.join(save_path, screenshot_filename)
+            screenshot.save(screenshot_path)
 
-            # Закрываем браузер
-            self.driver.quit()
-
+            self.show_popup(
+                "Screenshot saved",
+                f"Screenshot saved in {screenshot_path}"
+            )
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to take screenshot: {str(e)}")
+            self.show_popup("Error", f"An error occurred while taking the screenshot: {str(e)}")
 
-# Создание основного окна
-root = tk.Tk()
-app = CoordinatesApp(root)
-root.mainloop()
+
+class SystemTrayApp:
+    def __init__(self):
+        self.app = QApplication(sys.argv)
+        self.app.setQuitOnLastWindowClosed(False)
+        self.main_window = QWidget()
+        self.layout = QVBoxLayout()
+        self.log_widget = QTextEdit()
+        self.log_widget.setReadOnly(True)
+        self.layout.addWidget(self.log_widget)
+        self.input_field = QLineEdit()
+        self.input_field.setPlaceholderText("Enter prefix (code) here")
+        self.layout.addWidget(self.input_field)
+        self.village_field = QLineEdit()
+        self.village_field.setPlaceholderText("Enter village name here")
+        self.layout.addWidget(self.village_field)
+        self.submit_button = QPushButton("Submit")
+        self.submit_button.clicked.connect(self.on_submit)
+        self.layout.addWidget(self.submit_button)
+        self.main_window.setLayout(self.layout)
+        self.main_window.resize(800, 600)
+        self.open_google_maps()
+        self.tray_icon = QSystemTrayIcon(QIcon("icon.png"), self.app)
+        self.screenshot_app = ScreenshotApp(self.tray_icon, self.log_widget, self.input_field, self.village_field)
+        self.menu = QMenu()
+        self.exit_action = QAction("Exit", self.app)
+        self.exit_action.triggered.connect(self.app.quit)
+        self.menu.addAction(self.exit_action)
+        self.tray_icon.setContextMenu(self.menu)
+        self.tray_icon.activated.connect(self.on_tray_icon_click)
+        self.tray_icon.show()
+        self.main_window.show()
+        sys.exit(self.app.exec_())
+
+    def open_google_maps(self):
+        try:
+            command = 'start chrome --remote-debugging-port=9222 "https://www.google.com/maps"'
+            subprocess.Popen(command, shell=True)
+        except Exception as e:
+            print(f"Failed to open Google Maps: {str(e)}")
+
+    def on_submit(self):
+        global prefix
+        prefix = self.input_field.text().strip()
+        village_name = self.village_field.text().strip()
+        self.log_widget.append(f"Submitted code: {prefix}, village: {village_name}")
+        self.input_field.clear()
+        self.village_field.clear()
+        self.screenshot_app.record_coordinates()
+
+    def on_tray_icon_click(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self.screenshot_app.record_coordinates()
+
+
+if __name__ == '__main__':
+    SystemTrayApp()
