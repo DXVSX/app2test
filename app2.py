@@ -1,10 +1,9 @@
-import time
 import sys
 import os
 import pyautogui
 import subprocess
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMainWindow, QRubberBand, QTextEdit, \
-    QVBoxLayout, QWidget, QPushButton, QLineEdit, QMessageBox
+    QVBoxLayout, QWidget, QPushButton, QLineEdit
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QRect, QPoint, QSize
 from PIL import ImageGrab
@@ -14,13 +13,11 @@ import numpy as np
 import csv
 import pandas as pd
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from PyQt5.QtWidgets import QMessageBox
 
-prefix = ""
-village_name = ""
 
 class ScreenshotApp(QMainWindow):
     def __init__(self, tray_icon, log_widget, prefix_input, village_input):
@@ -53,11 +50,7 @@ class ScreenshotApp(QMainWindow):
     def setup_driver(self):
         options = Options()
         options.add_experimental_option("debuggerAddress", "localhost:9222")
-        try:
-            self.driver = webdriver.Chrome(service=Service('C:/Users/Dan/Desktop/chromedriver.exe'), options=options)
-        except Exception as e:
-            self.log(f"Failed to setup WebDriver: {str(e)}")
-            self.show_popup("Error", f"Failed to setup WebDriver: {str(e)}")
+        self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
 
     def log(self, message):
         self.log_widget.append(message)
@@ -82,10 +75,10 @@ class ScreenshotApp(QMainWindow):
 
         # Основная папка
         base_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'MapsMarkup')
-        
+
         # Папка с кодом и названием села
         village_name = self.village_input.text().strip()
-        save_path = os.path.join(base_folder, prefix, village_name)
+        save_path = os.path.join(base_folder, self.prefix_input.text().strip(), village_name)
         os.makedirs(save_path, exist_ok=True)
 
         # Папка для CSV и Excel файлов
@@ -94,7 +87,8 @@ class ScreenshotApp(QMainWindow):
         os.makedirs(csv_folder, exist_ok=True)
         os.makedirs(excel_folder, exist_ok=True)
 
-        file_name = datetime.now().strftime(f"screenshot_{prefix}_{village_name}_%Y%m%d_%H%M%S.png")
+        file_name = datetime.now().strftime(
+            f"screenshot_{self.prefix_input.text().strip()}_{village_name}_%Y%m%d_%H%M%S.png")
         file_path = os.path.join(save_path, file_name)
 
         screenshot.save(file_path)
@@ -104,27 +98,40 @@ class ScreenshotApp(QMainWindow):
         self.rubber_band.hide()
 
     def perform_corner_actions(self, rect):
-        pyautogui.sleep(1)
-        pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.top_left_coords = self.get_coords_from_maps()
-        self.log(f"Top-left coordinates: {self.top_left_coords}")
-        pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.bottom_right_coords = self.get_coords_from_maps()
-        self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+        # Функция для выполнения действий по углам
+        try:
+            pyautogui.sleep(1)
+            pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
+            pyautogui.sleep(1)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+
+            # Находим элемент с помощью XPATH и получаем координаты
+            self.top_left_coords = self.get_coords_from_maps()
+            self.log(f"Top-left coordinates: {self.top_left_coords}")
+
+            pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
+            pyautogui.sleep(1)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+
+            # Находим элемент с помощью XPATH и получаем координаты
+            self.bottom_right_coords = self.get_coords_from_maps()
+            self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+
+        except Exception as e:
+            self.log(f"Error performing corner actions: {e}")
 
     def get_coords_from_maps(self):
         try:
+            # Найти элемент по XPATH
             element = self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div')
+
+            # Получить текст элемента
             coords = element.text
             return coords
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.log(f"Error fetching coordinates from maps: {e}")
             return "Coordinates not found"
 
     def process_image(self, filepath, top_left_coords, bottom_right_coords, csv_folder, excel_folder):
@@ -147,7 +154,6 @@ class ScreenshotApp(QMainWindow):
             with open(csv_path, mode='w', newline='', encoding='utf-8') as file:
                 writer = csv.writer(file)
                 writer.writerow(['Marker', 'Lat', 'Long'])
-                global prefix
                 for i, contour in enumerate(contours, start=1):
                     if cv2.contourArea(contour) > 10:
                         M = cv2.moments(contour)
@@ -156,7 +162,7 @@ class ScreenshotApp(QMainWindow):
                             cy = int(M['m01'] / M['m00'])
                             lat = lat_top_left - cy * lat_scale
                             lon = lon_top_left + cx * lon_scale
-                            marker = f'{prefix}{i}'
+                            marker = f'{self.prefix_input.text().strip()}{i}'
                             writer.writerow([marker, lat, lon])
 
             # Сохранение Excel файла
@@ -219,13 +225,14 @@ class SystemTrayApp:
             command = 'start chrome --remote-debugging-port=9222 "https://www.google.com/maps"'
             subprocess.Popen(command, shell=True)
         except Exception as e:
-            print(f"Failed to open Google Maps: {str(e)}")
+            print(f"Error opening Google Maps: {e}")
 
     def on_submit(self):
-        global prefix
-        prefix = self.input_field.text().strip()
-        village_name = self.village_field.text().strip()
-        self.log_widget.append(f"Submitted code: {prefix}, village: {village_name}")
+        # Обновление префикса и названия деревни
+        self.screenshot_app.prefix = self.input_field.text().strip()
+        self.screenshot_app.village_name = self.village_field.text().strip()
+        self.log_widget.append(
+            f"Submitted code: {self.screenshot_app.prefix}, village: {self.screenshot_app.village_name}")
         self.input_field.clear()
         self.village_field.clear()
 
@@ -234,5 +241,5 @@ class SystemTrayApp:
             self.screenshot_app.start_screenshot()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     SystemTrayApp()
