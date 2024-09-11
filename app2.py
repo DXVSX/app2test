@@ -1,5 +1,4 @@
-#from pyautogui import moveTo
-#import time
+import time
 import sys
 import os
 import pyautogui
