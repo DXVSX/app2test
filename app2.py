@@ -1,22 +1,20 @@
 import sys
 import os
+import time
 import pyautogui
 import subprocess
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMainWindow, QRubberBand, QTextEdit, \
-    QVBoxLayout, QWidget, QPushButton, QLineEdit
+    QVBoxLayout, QWidget, QPushButton, QLineEdit, QMessageBox
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QRect, QPoint, QSize
 from PIL import ImageGrab
 from datetime import datetime
-import cv2
-import numpy as np
 import csv
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from PyQt5.QtWidgets import QMessageBox
 
 
 class ScreenshotApp(QMainWindow):
@@ -50,7 +48,11 @@ class ScreenshotApp(QMainWindow):
     def setup_driver(self):
         options = Options()
         options.add_experimental_option("debuggerAddress", "localhost:9222")
-        self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+        try:
+            self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+        except Exception as e:
+            self.log(f"Error initializing WebDriver: {e}")
+            self.show_popup("Error", f"Error initializing WebDriver: {e}")
 
     def log(self, message):
         self.log_widget.append(message)
@@ -66,12 +68,15 @@ class ScreenshotApp(QMainWindow):
 
     def mouseReleaseEvent(self, event):
         self.end_point = event.pos()
-        self.take_screenshot()
+        try:
+            self.take_screenshot()
+        except Exception as e:
+            self.log(f"Error taking screenshot: {e}")
+            self.show_popup("Error", f"Error taking screenshot: {e}")
 
     def take_screenshot(self):
         rect = QRect(self.start_point, self.end_point).normalized()
         self.hide()
-        screenshot = ImageGrab.grab(bbox=(rect.left(), rect.top(), rect.right(), rect.bottom()))
 
         # Основная папка
         base_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'MapsMarkup')
@@ -87,116 +92,107 @@ class ScreenshotApp(QMainWindow):
         os.makedirs(csv_folder, exist_ok=True)
         os.makedirs(excel_folder, exist_ok=True)
 
-        file_name = datetime.now().strftime(
-            f"screenshot_{self.prefix_input.text().strip()}_{village_name}_%Y%m%d_%H%M%S.png")
-        file_path = os.path.join(save_path, file_name)
-
-        screenshot.save(file_path)
-
-        self.perform_corner_actions(rect)
-        self.process_image(file_path, self.top_left_coords, self.bottom_right_coords, csv_folder, excel_folder)
-        self.rubber_band.hide()
+        try:
+            self.perform_corner_actions(rect)
+            self.capture_all_houses(rect, save_path)
+        except Exception as e:
+            self.log(f"Error during screenshot processing: {e}")
+            self.show_popup("Error", f"Error during screenshot processing: {e}")
+        finally:
+            self.rubber_band.hide()
 
     def perform_corner_actions(self, rect):
-    try:
-        # Верхний левый угол
         pyautogui.sleep(1)
-        pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.top_left_coords = self.get_coords_from_maps()
-        self.log(f"Top-left coordinates: {self.top_left_coords}")
 
-        # Верхний правый угол
-        pyautogui.moveTo(rect.right() - 10, rect.top() + 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.top_right_coords = self.get_coords_from_maps()
-        self.log(f"Top-right coordinates: {self.top_right_coords}")
+        try:
+            # Нажимаем правую кнопку мыши в верхнем левом углу
+            pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+            self.top_left_coords = self.get_coords_from_maps()
+            self.log(f"Top-left coordinates: {self.top_left_coords}")
 
-        # Нижний левый угол
-        pyautogui.moveTo(rect.left() + 10, rect.bottom() - 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.bottom_left_coords = self.get_coords_from_maps()
-        self.log(f"Bottom-left coordinates: {self.bottom_left_coords}")
+            # Верхний правый угол
+            pyautogui.moveTo(rect.right() - 10, rect.top() + 10)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+            self.top_right_coords = self.get_coords_from_maps()
+            self.log(f"Top-right coordinates: {self.top_right_coords}")
 
-        # Нижний правый угол
-        pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
-        pyautogui.sleep(1)
-        pyautogui.click(button='right')
-        pyautogui.sleep(1)
-        self.bottom_right_coords = self.get_coords_from_maps()
-        self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+            # Нажимаем правую кнопку мыши в нижнем правом углу
+            pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+            self.bottom_right_coords = self.get_coords_from_maps()
+            self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
 
-    except Exception as e:
-        self.log(f"Error performing corner actions: {e}")
+            # Нижний левый угол
+            pyautogui.moveTo(rect.left() + 10, rect.bottom() - 10)
+            pyautogui.click(button='right')
+            pyautogui.sleep(1)
+            self.bottom_left_coords = self.get_coords_from_maps()
+            self.log(f"Bottom-left coordinates: {self.bottom_left_coords}")
+
+        except Exception as e:
+            self.log(f"Error during corner actions: {e}")
+            self.show_popup("Error", f"Error during corner actions: {e}")
+
     def get_coords_from_maps(self):
         try:
-            # Найти элемент по XPATH
             element = self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div')
-
-            # Получить текст элемента
             coords = element.text
             return coords
         except Exception as e:
-            self.log(f"Error fetching coordinates from maps: {e}")
+            self.log(f"Error: {e}")
             return "Coordinates not found"
 
-    def process_image(self, filepath, top_left_coords, bottom_right_coords, csv_folder, excel_folder):
+    def capture_all_houses(self, rect, save_path):
+        """
+        Функция делает скриншоты домов, перемещаясь по области и увеличивая масштаб.
+        """
         try:
-            lat_top_left, lon_top_left = map(float, top_left_coords.split(','))
-            lat_bottom_right, lon_bottom_right = map(float, bottom_right_coords.split(','))
+            num_steps = 4  # Количество шагов для перемещения по области
+            step_x = rect.width() // num_steps
+            step_y = rect.height() // num_steps
 
-            image = cv2.imread(filepath)
-            height, width, _ = image.shape
+            for i in range(num_steps):
+                for j in range(num_steps):
+                    x_start = rect.left() + i * step_x
+                    y_start = rect.top() + j * step_y
+                    x_end = x_start + step_x
+                    y_end = y_start + step_y
 
-            target_color = np.array([237, 233, 232])
-            mask = cv2.inRange(image, target_color, target_color)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    # Увеличиваем масштаб
+                    self.zoom_in()
 
-            lat_scale = (lat_top_left - lat_bottom_right) / height
-            lon_scale = (lon_bottom_right - lon_top_left) / width
+                    # Делаем скриншот
+                    screenshot = ImageGrab.grab(bbox=(x_start, y_start, x_end, y_end))
+                    file_name = datetime.now().strftime(
+                        f"screenshot_{self.prefix_input.text().strip()}_{self.village_input.text().strip()}_x_{i}_y_{j}_%Y%m%d_%H%M%S.png")
+                    file_path = os.path.join(save_path, file_name)
+                    screenshot.save(file_path)
 
-            # Сохранение CSV файла
-            csv_path = self.get_unique_filename(csv_folder, 'houses.csv')
-            with open(csv_path, mode='w', newline='', encoding='utf-8') as file:
-                writer = csv.writer(file)
-                writer.writerow(['Marker', 'Lat', 'Long'])
-                for i, contour in enumerate(contours, start=1):
-                    if cv2.contourArea(contour) > 10:
-                        M = cv2.moments(contour)
-                        if M['m00'] != 0:
-                            cx = int(M['m10'] / M['m00'])
-                            cy = int(M['m01'] / M['m00'])
-                            lat = lat_top_left - cy * lat_scale
-                            lon = lon_top_left + cx * lon_scale
-                            marker = f'{self.prefix_input.text().strip()}{i}'
-                            writer.writerow([marker, lat, lon])
+                    # Перемещаемся по странице
+                    if j < num_steps - 1:
+                        pyautogui.scroll(-100)  # Прокрутка вверх, если нужно
 
-            # Сохранение Excel файла
-            excel_path = self.get_unique_filename(excel_folder, 'houses.xlsx')
-            data = pd.read_csv(csv_path)
-            data.to_excel(excel_path, index=False)
-
-            self.show_popup(
-                "Files saved",
-                f"CSV and Excel files saved in {csv_folder} and {excel_folder}"
-            )
+                if i < num_steps - 1:
+                    pyautogui.scroll(100 * step_y)  # Прокрутка вниз для следующего ряда
         except Exception as e:
-            self.show_popup("Error", f"An error occurred: {str(e)}")
+            self.log(f"Error during capturing all houses: {e}")
+            self.show_popup("Error", f"Error during capturing all houses: {e}")
 
-    def get_unique_filename(self, folder, filename):
-        base_name, ext = os.path.splitext(filename)
-        counter = 1
-        unique_filename = os.path.join(folder, filename)
-        while os.path.exists(unique_filename):
-            unique_filename = os.path.join(folder, f"{base_name}_{counter}{ext}")
-            counter += 1
-        return unique_filename
+    def zoom_in(self):
+        """
+        Функция увеличивает масштаб карты в Google Maps с помощью JavaScript.
+        """
+        try:
+            zoom_script = "document.querySelector('button[aria-label=\"Zoom in\"]').click();"
+            self.driver.execute_script(zoom_script)
+            time.sleep(2)  # Даем время браузеру для увеличения
+        except Exception as e:
+            self.log(f"Error during zooming in: {e}")
+            self.show_popup("Error", f"Error during zooming in: {e}")
 
 
 class SystemTrayApp:
@@ -237,14 +233,11 @@ class SystemTrayApp:
             command = 'start chrome --remote-debugging-port=9222 "https://www.google.com/maps"'
             subprocess.Popen(command, shell=True)
         except Exception as e:
-            print(f"Error opening Google Maps: {e}")
+            print(f"Failed to open Google Maps: {str(e)}")
 
     def on_submit(self):
-        # Обновление префикса и названия деревни
-        self.screenshot_app.prefix = self.input_field.text().strip()
-        self.screenshot_app.village_name = self.village_field.text().strip()
         self.log_widget.append(
-            f"Submitted code: {self.screenshot_app.prefix}, village: {self.screenshot_app.village_name}")
+            f"Submitted code: {self.input_field.text().strip()}, village: {self.village_field.text().strip()}")
         self.input_field.clear()
         self.village_field.clear()
 
@@ -253,5 +246,5 @@ class SystemTrayApp:
             self.screenshot_app.start_screenshot()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     SystemTrayApp()
