@@ -98,30 +98,42 @@ class ScreenshotApp(QMainWindow):
         self.rubber_band.hide()
 
     def perform_corner_actions(self, rect):
-        # Функция для выполнения действий по углам
-        try:
-            pyautogui.sleep(1)
-            pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
-            pyautogui.sleep(1)
-            pyautogui.click(button='right')
-            pyautogui.sleep(1)
+    try:
+        # Верхний левый угол
+        pyautogui.sleep(1)
+        pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
+        pyautogui.sleep(1)
+        pyautogui.click(button='right')
+        pyautogui.sleep(1)
+        self.top_left_coords = self.get_coords_from_maps()
+        self.log(f"Top-left coordinates: {self.top_left_coords}")
 
-            # Находим элемент с помощью XPATH и получаем координаты
-            self.top_left_coords = self.get_coords_from_maps()
-            self.log(f"Top-left coordinates: {self.top_left_coords}")
+        # Верхний правый угол
+        pyautogui.moveTo(rect.right() - 10, rect.top() + 10)
+        pyautogui.sleep(1)
+        pyautogui.click(button='right')
+        pyautogui.sleep(1)
+        self.top_right_coords = self.get_coords_from_maps()
+        self.log(f"Top-right coordinates: {self.top_right_coords}")
 
-            pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
-            pyautogui.sleep(1)
-            pyautogui.click(button='right')
-            pyautogui.sleep(1)
+        # Нижний левый угол
+        pyautogui.moveTo(rect.left() + 10, rect.bottom() - 10)
+        pyautogui.sleep(1)
+        pyautogui.click(button='right')
+        pyautogui.sleep(1)
+        self.bottom_left_coords = self.get_coords_from_maps()
+        self.log(f"Bottom-left coordinates: {self.bottom_left_coords}")
 
-            # Находим элемент с помощью XPATH и получаем координаты
-            self.bottom_right_coords = self.get_coords_from_maps()
-            self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+        # Нижний правый угол
+        pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
+        pyautogui.sleep(1)
+        pyautogui.click(button='right')
+        pyautogui.sleep(1)
+        self.bottom_right_coords = self.get_coords_from_maps()
+        self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
 
-        except Exception as e:
-            self.log(f"Error performing corner actions: {e}")
-
+    except Exception as e:
+        self.log(f"Error performing corner actions: {e}")
     def get_coords_from_maps(self):
         try:
             # Найти элемент по XPATH
