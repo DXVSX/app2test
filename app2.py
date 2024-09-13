@@ -125,7 +125,6 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.top_left_coords = self.get_coords_from_maps()
             self.log(f"Top-left coordinates: {self.top_left_coords}")
-            pyautogui.click(button='left')
 
             # Верхний правый угол
             pyautogui.moveTo(rect.right() - 10, rect.top() + 10)
@@ -133,7 +132,6 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.top_right_coords = self.get_coords_from_maps()
             self.log(f"Top-right coordinates: {self.top_right_coords}")
-            pyautogui.click(button='left')
 
             # Нажимаем правую кнопку мыши в нижнем правом углу
             pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
@@ -141,7 +139,6 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.bottom_right_coords = self.get_coords_from_maps()
             self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
-            pyautogui.click(button='left')
 
             # Нижний левый угол
             pyautogui.moveTo(rect.left() + 10, rect.bottom() - 10)
@@ -149,7 +146,6 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.bottom_left_coords = self.get_coords_from_maps()
             self.log(f"Bottom-left coordinates: {self.bottom_left_coords}")
-            pyautogui.click(button='left')
 
         except Exception as e:
             self.log(f"Error during corner actions: {e}")
@@ -164,27 +160,36 @@ class ScreenshotApp(QMainWindow):
             self.log(f"Error: {e}")
             return "Coordinates not found"
 
-    def capture_all_houses(self, rect, save_path):
-        """
-        Функция делает скриншоты домов, перемещаясь по области и устанавливая уровень зума на 17.
-        """
+    def capture_all_houses(self, rect, save_path, step_x_distance = 590, step_y_distance = 350):
+
         try:
-            num_steps = 4  # Количество шагов для перемещения по области
-            step_x = rect.width() // num_steps
-            step_y = rect.height() // num_steps
+            num_steps_x = (rect.width() + step_x_distance - 1) // step_x_distance
+            num_steps_y = (rect.height() + step_y_distance - 1) // step_y_distance
 
             # Установка фиксированного уровня зума
             self.set_zoom_level(self.driver, zoom_level=17)
 
-            for i in range(num_steps):
-                for j in range(num_steps):
-                    x_start = rect.left() + i * step_x
-                    y_start = rect.top() + j * step_y
-                    x_end = x_start + step_x
-                    y_end = y_start + step_y
+            for j in range(num_steps_y):
+                # Перемещение слева направо
+                for i in range(num_steps_x):
+                    x_start = rect.left() + i * step_x_distance
+                    y_start = rect.top() + j * step_y_distance
+                    x_end = x_start + step_x_distance
+                    y_end = y_start + step_y_distance
 
                     # Перемещаемся и делаем скриншот
                     self.move_to_and_capture(x_start, y_start, save_path)
+
+                # Перемещение справа налево, если не на последней строке
+                if j < num_steps_y - 1:
+                    for i in range(num_steps_x - 1, -1, -1):
+                        x_start = rect.left() + i * step_x_distance
+                        y_start = rect.top() + (j + 1) * step_y_distance
+                        x_end = x_start + step_x_distance
+                        y_end = y_start + step_y_distance
+
+                        # Перемещаемся и делаем скриншот
+                        self.move_to_and_capture(x_start, y_start, save_path)
 
         except Exception as e:
             self.log(f"Error during capturing all houses: {e}")
