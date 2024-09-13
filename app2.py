@@ -2,23 +2,24 @@ import sys
 import os
 import time
 import pyautogui
-import subprocess
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMainWindow, QRubberBand, QTextEdit, \
     QVBoxLayout, QWidget, QPushButton, QLineEdit, QMessageBox
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import QRect, QPoint, QSize
-from PIL import ImageGrab
+from PIL import ImageGrab, Image
+from PIL.Image import Resampling  # Импортируем Resampling
 from datetime import datetime
 import csv
 import pandas as pd
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+import re
 
 
 class ScreenshotApp(QMainWindow):
-    def __init__(self, tray_icon, log_widget, prefix_input, village_input):
+    def __init__(self, tray_icon, log_widget, prefix_input, village_input, zoom_input):
         super().__init__()
         self.start_point = QPoint()
         self.end_point = QPoint()
@@ -26,11 +27,17 @@ class ScreenshotApp(QMainWindow):
         self.tray_icon = tray_icon
         self.driver = None
         self.top_left_coords = ""
+        self.top_right_coords = ""
         self.bottom_right_coords = ""
+        self.bottom_left_coords = ""
         self.log_widget = log_widget
         self.prefix_input = prefix_input
         self.village_input = village_input
+        self.zoom_input = zoom_input
         self.setup_driver()
+
+        # Параметры зума
+        self.current_zoom = 17  # Фиксированный уровень зума
 
     def show_popup(self, title, message):
         msg_box = QMessageBox()
@@ -47,9 +54,16 @@ class ScreenshotApp(QMainWindow):
 
     def setup_driver(self):
         options = Options()
-        options.add_experimental_option("debuggerAddress", "localhost:9222")
+        options.add_argument("--remote-debugging-port=9222")
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-gpu")
+
         try:
             self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
+            self.driver.get("https://www.google.com/maps")
+            time.sleep(5)  # Подождите, пока страница загрузится
         except Exception as e:
             self.log(f"Error initializing WebDriver: {e}")
             self.show_popup("Error", f"Error initializing WebDriver: {e}")
@@ -111,6 +125,7 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.top_left_coords = self.get_coords_from_maps()
             self.log(f"Top-left coordinates: {self.top_left_coords}")
+            pyautogui.click(button='left')
 
             # Верхний правый угол
             pyautogui.moveTo(rect.right() - 10, rect.top() + 10)
@@ -118,6 +133,7 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.top_right_coords = self.get_coords_from_maps()
             self.log(f"Top-right coordinates: {self.top_right_coords}")
+            pyautogui.click(button='left')
 
             # Нажимаем правую кнопку мыши в нижнем правом углу
             pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
@@ -125,6 +141,7 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.bottom_right_coords = self.get_coords_from_maps()
             self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+            pyautogui.click(button='left')
 
             # Нижний левый угол
             pyautogui.moveTo(rect.left() + 10, rect.bottom() - 10)
@@ -132,6 +149,7 @@ class ScreenshotApp(QMainWindow):
             pyautogui.sleep(1)
             self.bottom_left_coords = self.get_coords_from_maps()
             self.log(f"Bottom-left coordinates: {self.bottom_left_coords}")
+            pyautogui.click(button='left')
 
         except Exception as e:
             self.log(f"Error during corner actions: {e}")
@@ -148,12 +166,15 @@ class ScreenshotApp(QMainWindow):
 
     def capture_all_houses(self, rect, save_path):
         """
-        Функция делает скриншоты домов, перемещаясь по области и увеличивая масштаб.
+        Функция делает скриншоты домов, перемещаясь по области и устанавливая уровень зума на 17.
         """
         try:
             num_steps = 4  # Количество шагов для перемещения по области
             step_x = rect.width() // num_steps
             step_y = rect.height() // num_steps
+
+            # Установка фиксированного уровня зума
+            self.set_zoom_level(self.driver, zoom_level=17)
 
             for i in range(num_steps):
                 for j in range(num_steps):
@@ -162,89 +183,110 @@ class ScreenshotApp(QMainWindow):
                     x_end = x_start + step_x
                     y_end = y_start + step_y
 
-                    # Увеличиваем масштаб
-                    self.zoom_in()
+                    # Перемещаемся и делаем скриншот
+                    self.move_to_and_capture(x_start, y_start, save_path)
 
-                    # Делаем скриншот
-                    screenshot = ImageGrab.grab(bbox=(x_start, y_start, x_end, y_end))
-                    file_name = datetime.now().strftime(
-                        f"screenshot_{self.prefix_input.text().strip()}_{self.village_input.text().strip()}_x_{i}_y_{j}_%Y%m%d_%H%M%S.png")
-                    file_path = os.path.join(save_path, file_name)
-                    screenshot.save(file_path)
-
-                    # Перемещаемся по странице
-                    if j < num_steps - 1:
-                        pyautogui.scroll(-100)  # Прокрутка вверх, если нужно
-
-                if i < num_steps - 1:
-                    pyautogui.scroll(100 * step_y)  # Прокрутка вниз для следующего ряда
         except Exception as e:
             self.log(f"Error during capturing all houses: {e}")
             self.show_popup("Error", f"Error during capturing all houses: {e}")
 
-    def zoom_in(self):
+    def move_to_and_capture(self, x, y, save_path):
         """
-        Функция увеличивает масштаб карты в Google Maps с помощью JavaScript.
+        Перемещает карту к указанной позиции и делает скриншот, изменяя размер на 1180x700 пикселей.
         """
         try:
-            zoom_script = "document.querySelector('button[aria-label=\"Zoom in\"]').click();"
-            self.driver.execute_script(zoom_script)
-            time.sleep(2)  # Даем время браузеру для увеличения
+            pyautogui.moveTo(x, y)
+            pyautogui.click(button='left')
+            time.sleep(2)  # Ожидание, пока карта обновится
+
+            # Задаем название файла с текущим временем
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = os.path.join(save_path, f"screenshot_{timestamp}.png")
+
+            # Делаем скриншот
+            screenshot = ImageGrab.grab(bbox=(x, y, x + 1180, y + 700))
+
+            # Изменяем размер изображения на 1180x700 пикселей
+            screenshot = screenshot.resize((1180, 700), Resampling.LANCZOS)
+            screenshot.save(filename)
+            self.log(f"Screenshot saved to {filename}")
+
         except Exception as e:
-            self.log(f"Error during zooming in: {e}")
-            self.show_popup("Error", f"Error during zooming in: {e}")
+            self.log(f"Error capturing screenshot at ({x}, {y}): {e}")
+            self.show_popup("Error", f"Error capturing screenshot at ({x}, {y}): {e}")
+
+    def set_zoom_level(self, driver, zoom_level):
+        latitude, longitude, _ = self.get_coordinates_and_zoom(driver)
+        if latitude is not None and longitude is not None:
+            new_url = f'https://www.google.com/maps/@{latitude},{longitude},{zoom_level}z'
+            driver.get(new_url)
+            time.sleep(2)  # Ожидание обновления карты
+        else:
+            self.log("Не удалось получить текущие координаты. Попробуйте снова.")
+
+    def get_coordinates_and_zoom(self, driver):
+        url = driver.current_url
+        # Регулярное выражение для извлечения координат и уровня зума
+        match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+),(\d+)z', url)
+        if match:
+            latitude = float(match.group(1))
+            longitude = float(match.group(2))
+            zoom_level = int(match.group(3))
+            return latitude, longitude, zoom_level
+        else:
+            return None, None, None
 
 
-class SystemTrayApp:
+class MainWindow(QMainWindow):
     def __init__(self):
-        self.app = QApplication(sys.argv)
-        self.app.setQuitOnLastWindowClosed(False)
-        self.main_window = QWidget()
-        self.layout = QVBoxLayout()
+        super().__init__()
+
+        self.setWindowTitle("Screenshot Tool")
+        self.setGeometry(100, 100, 400, 300)
+
+        self.tray_icon = QSystemTrayIcon(QIcon("icon.png"), self)
+        tray_menu = QMenu()
+        quit_action = QAction("Exit", self)
+        quit_action.triggered.connect(QApplication.instance().quit)
+        tray_menu.addAction(quit_action)
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()
+
+        # Layout and widgets
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
+
         self.log_widget = QTextEdit()
         self.log_widget.setReadOnly(True)
-        self.layout.addWidget(self.log_widget)
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Enter prefix (code) here")
-        self.layout.addWidget(self.input_field)
-        self.village_field = QLineEdit()
-        self.village_field.setPlaceholderText("Enter village name here")
-        self.layout.addWidget(self.village_field)
-        self.submit_button = QPushButton("Submit")
-        self.submit_button.clicked.connect(self.on_submit)
-        self.layout.addWidget(self.submit_button)
-        self.main_window.setLayout(self.layout)
-        self.main_window.resize(800, 600)
-        self.open_google_maps()
-        self.tray_icon = QSystemTrayIcon(QIcon("icon.png"), self.app)
-        self.screenshot_app = ScreenshotApp(self.tray_icon, self.log_widget, self.input_field, self.village_field)
-        self.menu = QMenu()
-        self.exit_action = QAction("Exit", self.app)
-        self.exit_action.triggered.connect(self.app.quit)
-        self.menu.addAction(self.exit_action)
-        self.tray_icon.setContextMenu(self.menu)
-        self.tray_icon.activated.connect(self.on_tray_icon_click)
-        self.tray_icon.show()
-        self.main_window.show()
-        sys.exit(self.app.exec_())
+        layout.addWidget(self.log_widget)
 
-    def open_google_maps(self):
-        try:
-            command = 'start chrome --remote-debugging-port=9222 "https://www.google.com/maps"'
-            subprocess.Popen(command, shell=True)
-        except Exception as e:
-            print(f"Failed to open Google Maps: {str(e)}")
+        self.prefix_input = QLineEdit()
+        self.prefix_input.setPlaceholderText("Enter code (e.g., CM, SL)")
+        layout.addWidget(self.prefix_input)
 
-    def on_submit(self):
-        self.log_widget.append(
-            f"Submitted code: {self.input_field.text().strip()}, village: {self.village_field.text().strip()}")
-        self.input_field.clear()
-        self.village_field.clear()
+        self.village_input = QLineEdit()
+        self.village_input.setPlaceholderText("Enter village name")
+        layout.addWidget(self.village_input)
 
-    def on_tray_icon_click(self, reason):
-        if reason == QSystemTrayIcon.Trigger:
-            self.screenshot_app.start_screenshot()
+        self.zoom_input = QLineEdit()
+        self.zoom_input.setPlaceholderText("Zoom level (fixed to 17)")
+        layout.addWidget(self.zoom_input)
+
+        submit_button = QPushButton("Submit")
+        submit_button.clicked.connect(self.submit_data)
+        layout.addWidget(submit_button)
+
+        self.screenshot_app = ScreenshotApp(self.tray_icon, self.log_widget, self.prefix_input, self.village_input,
+                                            self.zoom_input)
+
+    def submit_data(self):
+        self.screenshot_app.start_screenshot()
 
 
-if __name__ == '__main__':
-    SystemTrayApp()
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    sys.exit(app.exec_())
