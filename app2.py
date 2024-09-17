@@ -2,12 +2,10 @@ import sys
 import os
 import time
 import pyautogui
-from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMainWindow, QRubberBand, QTextEdit, \
-    QVBoxLayout, QWidget, QPushButton, QLineEdit, QMessageBox
-from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QApplication, QMainWindow, QRubberBand, QTextEdit, QVBoxLayout, QWidget, QPushButton, QLineEdit, QMessageBox
 from PyQt5.QtCore import QRect, QPoint, QSize
 from PIL import ImageGrab, Image
-from PIL.Image import Resampling  # Импортируем Resampling
+from PIL.Image import Resampling
 from datetime import datetime
 import csv
 import pandas as pd
@@ -19,12 +17,11 @@ import re
 
 
 class ScreenshotApp(QMainWindow):
-    def __init__(self, tray_icon, log_widget, prefix_input, village_input, zoom_input):
+    def __init__(self, log_widget, prefix_input, village_input, zoom_input):
         super().__init__()
         self.start_point = QPoint()
         self.end_point = QPoint()
         self.rubber_band = QRubberBand(QRubberBand.Rectangle, self)
-        self.tray_icon = tray_icon
         self.driver = None
         self.top_left_coords = ""
         self.top_right_coords = ""
@@ -35,8 +32,6 @@ class ScreenshotApp(QMainWindow):
         self.village_input = village_input
         self.zoom_input = zoom_input
         self.setup_driver()
-
-        # Параметры зума
         self.current_zoom = 17  # Фиксированный уровень зума
 
     def show_popup(self, title, message):
@@ -119,7 +114,7 @@ class ScreenshotApp(QMainWindow):
         pyautogui.sleep(1)
 
         try:
-            # Нажимаем правую кнопку мыши в верхнем левом углу
+            # Верхний левый угол
             pyautogui.moveTo(rect.left() + 10, rect.top() + 10)
             pyautogui.click(button='right')
             pyautogui.sleep(1)
@@ -133,7 +128,7 @@ class ScreenshotApp(QMainWindow):
             self.top_right_coords = self.get_coords_from_maps()
             self.log(f"Top-right coordinates: {self.top_right_coords}")
 
-            # Нажимаем правую кнопку мыши в нижнем правом углу
+            # Нижний правый угол
             pyautogui.moveTo(rect.right() - 10, rect.bottom() - 10)
             pyautogui.click(button='right')
             pyautogui.sleep(1)
@@ -155,70 +150,11 @@ class ScreenshotApp(QMainWindow):
         try:
             element = self.driver.find_element(By.XPATH, '//*[@id="action-menu"]/div[1]/div/div')
             coords = element.text
-            return coords
+            # Разбиваем координаты на широту и долготу
+            return coords  # Вернем координаты в виде строки
         except Exception as e:
             self.log(f"Error: {e}")
-            return "Coordinates not found"
-
-    def capture_all_houses(self, rect, save_path, step_x_distance = 590, step_y_distance = 350):
-
-        try:
-            num_steps_x = (rect.width() + step_x_distance - 1) // step_x_distance
-            num_steps_y = (rect.height() + step_y_distance - 1) // step_y_distance
-
-            # Установка фиксированного уровня зума
-            self.set_zoom_level(self.driver, zoom_level=17)
-
-            for j in range(num_steps_y):
-                # Перемещение слева направо
-                for i in range(num_steps_x):
-                    x_start = rect.left() + i * step_x_distance
-                    y_start = rect.top() + j * step_y_distance
-                    x_end = x_start + step_x_distance
-                    y_end = y_start + step_y_distance
-
-                    # Перемещаемся и делаем скриншот
-                    self.move_to_and_capture(x_start, y_start, save_path)
-
-                # Перемещение справа налево, если не на последней строке
-                if j < num_steps_y - 1:
-                    for i in range(num_steps_x - 1, -1, -1):
-                        x_start = rect.left() + i * step_x_distance
-                        y_start = rect.top() + (j + 1) * step_y_distance
-                        x_end = x_start + step_x_distance
-                        y_end = y_start + step_y_distance
-
-                        # Перемещаемся и делаем скриншот
-                        self.move_to_and_capture(x_start, y_start, save_path)
-
-        except Exception as e:
-            self.log(f"Error during capturing all houses: {e}")
-            self.show_popup("Error", f"Error during capturing all houses: {e}")
-
-    def move_to_and_capture(self, x, y, save_path):
-        """
-        Перемещает карту к указанной позиции и делает скриншот, изменяя размер на 1180x700 пикселей.
-        """
-        try:
-            pyautogui.moveTo(x, y)
-            pyautogui.click(button='left')
-            time.sleep(2)  # Ожидание, пока карта обновится
-
-            # Задаем название файла с текущим временем
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.join(save_path, f"screenshot_{timestamp}.png")
-
-            # Делаем скриншот
-            screenshot = ImageGrab.grab(bbox=(x, y, x + 1180, y + 700))
-
-            # Изменяем размер изображения на 1180x700 пикселей
-            screenshot = screenshot.resize((1180, 700), Resampling.LANCZOS)
-            screenshot.save(filename)
-            self.log(f"Screenshot saved to {filename}")
-
-        except Exception as e:
-            self.log(f"Error capturing screenshot at ({x}, {y}): {e}")
-            self.show_popup("Error", f"Error capturing screenshot at ({x}, {y}): {e}")
+            return ""
 
     def set_zoom_level(self, driver, zoom_level):
         latitude, longitude, _ = self.get_coordinates_and_zoom(driver)
@@ -231,7 +167,6 @@ class ScreenshotApp(QMainWindow):
 
     def get_coordinates_and_zoom(self, driver):
         url = driver.current_url
-        # Регулярное выражение для извлечения координат и уровня зума
         match = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+),(\d+)z', url)
         if match:
             latitude = float(match.group(1))
@@ -241,57 +176,101 @@ class ScreenshotApp(QMainWindow):
         else:
             return None, None, None
 
+    def move_to_and_capture(self, latitude, longitude, save_path):
+        try:
+            # Обновляем URL с новыми координатами
+            new_url = f'https://www.google.com/maps/@{latitude},{longitude},{self.current_zoom}z'
+            self.driver.get(new_url)
+            time.sleep(2)  # Ожидание обновления карты
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
+            # Задаем название файла с текущим временем
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = os.path.join(save_path, f"screenshot_{timestamp}.png")
 
-        self.setWindowTitle("Screenshot Tool")
-        self.setGeometry(100, 100, 400, 300)
+            # Делаем скриншот
+            screenshot = ImageGrab.grab(bbox=(100, 100, 1280, 800))  # Параметры области экрана для скриншота
+            screenshot = screenshot.resize((1180, 700), Resampling.LANCZOS)
+            screenshot.save(filename)
+            self.log(f"Screenshot saved to {filename}")
 
-        self.tray_icon = QSystemTrayIcon(QIcon("icon.png"), self)
-        tray_menu = QMenu()
-        quit_action = QAction("Exit", self)
-        quit_action.triggered.connect(QApplication.instance().quit)
-        tray_menu.addAction(quit_action)
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.show()
+            # Добавляем паузу перед следующим шагом
+            time.sleep(4)  # Время ожидания для загрузки карты с новыми координатами
 
-        # Layout and widgets
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout()
-        central_widget.setLayout(layout)
+        except Exception as e:
+            self.log(f"Error capturing screenshot at ({latitude}, {longitude}): {e}")
+            self.show_popup("Error", f"Error capturing screenshot at ({latitude}, {longitude}): {e}")
 
-        self.log_widget = QTextEdit()
-        self.log_widget.setReadOnly(True)
-        layout.addWidget(self.log_widget)
+    def capture_all_houses(self, rect, save_path, step_lat=0.0020, step_lon=0.0060):
+        try:
+            # Преобразуем координаты углов в числовой формат
+            top_left_lat, top_left_lon = self.parse_coords(self.top_left_coords)
+            top_right_lat, top_right_lon = self.parse_coords(self.top_right_coords)
+            bottom_right_lat, bottom_right_lon = self.parse_coords(self.bottom_right_coords)
+            bottom_left_lat, bottom_left_lon = self.parse_coords(self.bottom_left_coords)
 
-        self.prefix_input = QLineEdit()
-        self.prefix_input.setPlaceholderText("Enter code (e.g., CM, SL)")
-        layout.addWidget(self.prefix_input)
+            if None in (top_left_lat, top_left_lon, top_right_lat, top_right_lon, bottom_right_lat, bottom_right_lon, bottom_left_lat, bottom_left_lon):
+                raise ValueError("Не удалось получить все координаты углов.")
 
-        self.village_input = QLineEdit()
-        self.village_input.setPlaceholderText("Enter village name")
-        layout.addWidget(self.village_input)
+            num_steps_x = int((top_right_lon - top_left_lon) // step_lon)
+            num_steps_y = int((top_left_lat - bottom_left_lat) // step_lat)
 
-        self.zoom_input = QLineEdit()
-        self.zoom_input.setPlaceholderText("Zoom level (fixed to 17)")
-        layout.addWidget(self.zoom_input)
+            for j in range(num_steps_y):
+                # Перемещение слева направо
+                for i in range(num_steps_x):
+                    current_lat = top_left_lat - j * step_lat
+                    current_lon = top_left_lon + i * step_lon
+                    self.move_to_and_capture(current_lat, current_lon, save_path)
 
-        submit_button = QPushButton("Submit")
-        submit_button.clicked.connect(self.submit_data)
-        layout.addWidget(submit_button)
+        except Exception as e:
+            self.log(f"Error during house capture: {e}")
+            self.show_popup("Error", f"Error during house capture: {e}")
 
-        self.screenshot_app = ScreenshotApp(self.tray_icon, self.log_widget, self.prefix_input, self.village_input,
-                                            self.zoom_input)
+    def parse_coords(self, coords):
+        try:
+            if coords:
+                # Если координаты в формате строки, преобразуем их
+                if isinstance(coords, str):
+                    return tuple(map(float, coords.split(',')))
+                # Если координаты уже в виде кортежа, возвращаем их как есть
+                elif isinstance(coords, tuple) and len(coords) == 2:
+                    return coords
+            return None, None
+        except Exception as e:
+            self.log(f"Error parsing coordinates: {e}")
+            return None, None
 
-    def submit_data(self):
-        self.screenshot_app.start_screenshot()
+
+def main():
+    app = QApplication(sys.argv)
+    window = QWidget()
+    layout = QVBoxLayout()
+
+    log_widget = QTextEdit()
+    layout.addWidget(log_widget)
+
+    prefix_input = QLineEdit()
+    layout.addWidget(prefix_input)
+    prefix_input.setPlaceholderText("Введите код")
+
+    village_input = QLineEdit()
+    layout.addWidget(village_input)
+    village_input.setPlaceholderText("Введите название села")
+
+    zoom_input = QLineEdit()
+    layout.addWidget(zoom_input)
+    zoom_input.setPlaceholderText("Введите лимит зума")
+
+    screenshot_button = QPushButton("Сделать снимок")
+    layout.addWidget(screenshot_button)
+
+    window.setLayout(layout)
+    window.show()
+
+    app_instance = ScreenshotApp(log_widget, prefix_input, village_input, zoom_input)
+    screenshot_button.clicked.connect(app_instance.start_screenshot)
+
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    main_window = MainWindow()
-    main_window.show()
-    sys.exit(app.exec_())
+    main()
