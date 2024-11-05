@@ -1,14 +1,14 @@
 import sys
 import os
 import time
-import pyautogui
 import cv2
 import numpy as np
 import math
-from PyQt5.QtWidgets import QApplication, QMainWindow, QRubberBand, QTextEdit, QVBoxLayout, QWidget, QPushButton, \
-    QLineEdit, QMessageBox, QDialog, QLabel
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QRubberBand, QTextEdit, QVBoxLayout,
+    QWidget, QPushButton, QLineEdit, QMessageBox, QDialog, QLabel
+)
 from PyQt5.QtCore import QRect, QPoint, QSize, Qt
-from PIL import ImageGrab
 from datetime import datetime
 import csv
 import pandas as pd
@@ -18,22 +18,21 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import re
-
+import pyautogui
+from sklearn.cluster import DBSCAN
 
 class CompletionDialog(QDialog):
     def __init__(self, title, message, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setFixedSize(500, 300)  # Устанавливаем желаемый размер окна
-
-        # Центрируем окно на экране
+        self.setFixedSize(700, 300)  # Set the desired window size
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint | Qt.WindowModal)
         self.center_on_screen()
 
         layout = QVBoxLayout()
         label = QLabel(message)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("font-size: 16pt;")
+        label.setStyleSheet("font-size: 12pt;")
         layout.addWidget(label)
 
         ok_button = QPushButton("OK")
@@ -65,18 +64,27 @@ class ScreenshotApp(QMainWindow):
         self.prefix_input = prefix_input
         self.village_input = village_input
         self.setup_driver()
-        self.current_zoom = 19  # Уровень масштаба для лучшей точности
+        self.current_zoom = 19  # Zoom level for better accuracy
         self.house_coordinates = []
 
-        # Целевой цвет домов в HEX (#E8E9ED)
+        # Target house color in HEX (#E8E9ED)
         target_color_hex = '#E8E9ED'
-        # Преобразуем HEX в RGB
+        # Convert HEX to RGB
         target_color_rgb = tuple(int(target_color_hex[i:i + 2], 16) for i in (1, 3, 5))
-        # Преобразуем в BGR для OpenCV
-        self.target_color = np.array(target_color_rgb[::-1], dtype=np.uint8)  # Это будет [237, 233, 232]
+        # Convert to BGR for OpenCV
+        self.target_color = np.array(target_color_rgb[::-1], dtype=np.uint8)
+
+        # Filtering parameters
+        self.min_area = 200     # Minimum area of the object
+        self.max_area = 50000   # Increased maximum area to include larger houses
+        self.min_aspect_ratio = 0.2  # Minimum aspect ratio
+        self.max_aspect_ratio = 2.0  # Maximum aspect ratio
+
+        # Thresholds to distinguish between sheds and houses
+        self.shed_area_threshold = 5000   # Max area for a shed
+        # Houses are any quadrilaterals with area greater than shed_area_threshold and less than max_area
 
     def get_meters_per_pixel(self, latitude, zoom_level):
-        # Эта функция вычисляет, сколько метров представляет один пиксель при заданной широте и уровне масштаба
         return (156543.03392 * math.cos(math.radians(latitude))) / (2 ** zoom_level)
 
     def show_popup(self, title, message):
@@ -105,13 +113,11 @@ class ScreenshotApp(QMainWindow):
         try:
             self.driver = webdriver.Chrome(service=Service('chromedriver.exe'), options=options)
             self.driver.get("https://www.google.com/maps")
-
             self.hide_elements()
-
-            time.sleep(2)  # Ожидание загрузки страницы
+            time.sleep(2)  # Wait for the page to load
         except Exception as e:
             self.log(f"Error initializing WebDriver: {e}")
-            self.show_popup("Ошибка", f"Ошибка инициализации WebDriver: {e}")
+            self.show_popup("Error", f"Error initializing WebDriver: {e}")
 
     def hide_elements(self):
         try:
@@ -137,7 +143,7 @@ class ScreenshotApp(QMainWindow):
                     self.log(f"Error hiding element {xpath}: {e}")
 
         except Exception as e:
-            self.log(f"Error during hide_elements: {e}")
+            self.log(f"Error in hide_elements: {e}")
 
     def log(self, message):
         self.log_widget.append(message)
@@ -157,7 +163,7 @@ class ScreenshotApp(QMainWindow):
             self.take_screenshot()
         except Exception as e:
             self.log(f"Error taking screenshot: {e}")
-            self.show_popup("Ошибка", f"Ошибка при создании скриншота: {e}")
+            self.show_popup("Error", f"Error taking screenshot: {e}")
 
     def take_screenshot(self):
         rect = QRect(self.start_point, self.end_point).normalized()
@@ -177,10 +183,10 @@ class ScreenshotApp(QMainWindow):
         try:
             self.perform_corner_actions(rect)
             self.capture_all_houses(save_path)
-            self.mark_houses(csv_folder, excel_folder)
+            self.mark_houses(csv_folder, excel_folder, save_path)
         except Exception as e:
-            self.log(f"Error during screenshot processing: {e}")
-            self.show_popup("Ошибка", f"Ошибка при обработке скриншота: {e}")
+            self.log(f"Error processing screenshot: {e}")
+            self.show_popup("Error", f"Error processing screenshot: {e}")
         finally:
             self.rubber_band.hide()
 
@@ -188,21 +194,23 @@ class ScreenshotApp(QMainWindow):
         pyautogui.sleep(1)
 
         try:
+            # Top-left corner
             pyautogui.moveTo(rect.left(), rect.top())
             pyautogui.click(button='right')
             pyautogui.sleep(1)
             self.top_left_coords = self.get_coords_from_maps()
-            self.log(f"Top-left coordinates: {self.top_left_coords}")
+            self.log(f"Top-left corner coordinates: {self.top_left_coords}")
 
+            # Bottom-right corner
             pyautogui.moveTo(rect.right(), rect.bottom())
             pyautogui.click(button='right')
             pyautogui.sleep(1)
             self.bottom_right_coords = self.get_coords_from_maps()
-            self.log(f"Bottom-right coordinates: {self.bottom_right_coords}")
+            self.log(f"Bottom-right corner coordinates: {self.bottom_right_coords}")
 
         except Exception as e:
-            self.log(f"Error during corner actions: {e}")
-            self.show_popup("Ошибка", f"Ошибка при получении координат: {e}")
+            self.log(f"Error performing corner actions: {e}")
+            self.show_popup("Error", f"Error obtaining coordinates: {e}")
 
     def get_coords_from_maps(self):
         try:
@@ -210,32 +218,219 @@ class ScreenshotApp(QMainWindow):
             coords = element.text
             return coords
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.log(f"Error getting coordinates: {e}")
             return ""
 
-    def is_duplicate(self, new_lat, new_lon, house_coordinates):
-        # Устанавливаем допустимое расстояние между домами (в метрах)
-        allowed_distance = 10  # 10 метров
+    def calculate_distance(self, lat1, lon1, lat2, lon2):
+        """
+        Вычисление расстояния между двумя координатами (в метрах) с использованием формулы Haversine.
+        """
+        R = 6371000  # Радиус Земли в метрах
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
 
-        # Переводим координаты в радианы
-        new_lat_rad = math.radians(new_lat)
-        new_lon_rad = math.radians(new_lon)
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
 
-        for lat, lon in house_coordinates:
-            lat_rad = math.radians(lat)
-            lon_rad = math.radians(lon)
-            # Используем формулу haversine для вычисления расстояния между двумя точками на сфере
-            dlat = lat_rad - new_lat_rad
-            dlon = lon_rad - new_lon_rad
-            a = math.sin(dlat / 2) ** 2 + math.cos(new_lat_rad) * math.cos(lat_rad) * math.sin(dlon / 2) ** 2
-            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-            distance = 6371000 * c  # Радиус Земли ~6371 км
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-            if distance < allowed_distance:
-                return True
-        return False
+        return R * c  # Возвращает расстояние в метрах
+
+    def merge_close_houses(self, house_coordinates, merge_distance):
+        """
+        Groups houses that are close to each other and returns the center coordinates.
+        """
+        merged_houses = []
+        used = set()
+
+        for i, (lat1, lon1) in enumerate(house_coordinates):
+            if i in used:
+                continue
+
+            close_houses = [(lat1, lon1)]
+            used.add(i)
+
+            for j, (lat2, lon2) in enumerate(house_coordinates):
+                if j != i and j not in used:
+                    distance = self.calculate_distance(lat1, lon1, lat2, lon2)
+                    if distance <= merge_distance:
+                        close_houses.append((lat2, lon2))
+                        used.add(j)
+
+            if close_houses:
+                avg_lat = sum([lat for lat, lon in close_houses]) / len(close_houses)
+                avg_lon = sum([lon for lat, lon in close_houses]) / len(close_houses)
+                merged_houses.append((avg_lat, avg_lon))
+
+        return merged_houses
+
+    def detect_houses_on_map(self, image_path, latitude, longitude, meters_per_pixel):
+        """
+        Process the image to detect houses and mark them with improved sensitivity.
+        """
+        image = cv2.imread(image_path)
+        if image is None:
+            self.log(f"Error loading image {image_path}")
+            return []
+
+        height, width, _ = image.shape
+
+        # Debug logging for image dimensions
+        self.log(f"Image loaded with dimensions: {width}x{height}")
+
+        # Save the original image for verification
+        original_image_path = image_path.replace(".png", "_step1_original.png")
+        cv2.imwrite(original_image_path, image)
+
+        # Define color tolerance
+        tolerance = 10  # Increased tolerance for better detection
+        lower_bound = np.clip(self.target_color - tolerance, 0, 255)
+        upper_bound = np.clip(self.target_color + tolerance, 0, 255)
+
+        # Create a mask for the target color
+        mask = cv2.inRange(image, lower_bound, upper_bound)
+        self.log(f"Mask created with bounds: lower={lower_bound}, upper={upper_bound}")
+
+        # Apply morphological operations to clean the mask
+        kernel_size = 3  # Adjust if needed for sensitivity
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+        opened_mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        closed_mask = cv2.morphologyEx(opened_mask, cv2.MORPH_CLOSE, kernel)
+
+        # Find contours in the mask
+        contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        self.log(f"Contours detected: {len(contours)}")
+
+        house_coordinates = []
+
+        # Thresholds for filtering
+        small_house_threshold = 200  # Reduced threshold to capture smaller houses
+        large_house_threshold = 1500  # Threshold for residential houses
+
+        # For visualization
+        houses_colored_image = np.zeros_like(image)
+
+        for contour in contours:
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+
+            if len(approx) >= 4:  # Include polygons with 4 or more vertices
+                area = cv2.contourArea(approx)
+
+                # Logging for each detected contour's area
+                self.log(f"Contour area: {area}")
+
+                # Filtering based on area
+                if area > small_house_threshold:
+                    if area >= large_house_threshold:
+                        # Mark house in red
+                        cv2.drawContours(houses_colored_image, [contour], -1, (0, 0, 255), cv2.FILLED)
+
+                        # Calculate the center of the house
+                        M = cv2.moments(contour)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"] / M["m00"])
+                            cy = int(M["m01"] / M["m00"])
+
+                            dx_pixels = cx - (width / 2)
+                            dy_pixels = cy - (height / 2)
+
+                            dx_meters = dx_pixels * meters_per_pixel
+                            dy_meters = dy_pixels * meters_per_pixel
+
+                            delta_lat = -dy_meters / 110540
+                            delta_lon = dx_meters / (111320 * math.cos(math.radians(latitude)))
+
+                            house_lat = latitude + delta_lat
+                            house_lon = longitude + delta_lon
+
+                            # Add house coordinates to the list
+                            house_coordinates.append((house_lat, house_lon))
+                            self.log(f"Marked house at {house_lat}, {house_lon}")
+                    else:
+                        # Mark house in green (smaller than large threshold but larger than shed)
+                        cv2.drawContours(houses_colored_image, [contour], -1, (0, 255, 0), cv2.FILLED)
+                else:
+                    self.log(f"Excluded house with area: {area} (too small)")
+            else:
+                self.log(f"Excluded contour with {len(approx)} vertices (less than 4)")
+
+        # Save the image with marked houses
+        colored_houses_path = image_path.replace(".png", "_colored_houses_filtered.png")
+        cv2.imwrite(colored_houses_path, houses_colored_image)
+
+        self.log(f"Total houses marked: {len(house_coordinates)}")
+
+        return house_coordinates
+
+    def is_valid_house(self, lat, lon):
+        """
+        Additional check to determine if the object is a house.
+        You can add extra criteria here if necessary.
+        Currently, it just checks that the coordinates are unique.
+        """
+        # You can add a check for similar coordinates in already detected houses
+        for existing_lat, existing_lon in self.house_coordinates:
+            distance = self.calculate_distance(lat, lon, existing_lat, existing_lon)
+            if distance < 1.5:  # Acceptable distance in meters
+                return False
+        return True
+
+    def capture_all_houses(self, save_path):
+        """
+        Traverses the entire specified area, takes screenshots, and detects houses.
+        Увеличение перекрытия между снимками для захвата всех домов.
+        """
+        try:
+            self.house_coordinates = []
+            visited_positions = set()
+
+            top_left_lat, top_left_lon = self.parse_coords(self.top_left_coords)
+            bottom_right_lat, bottom_right_lon = self.parse_coords(self.bottom_right_coords)
+
+            if top_left_lat is None or bottom_right_lat is None:
+                self.log("Invalid coordinate format. Aborting capture.")
+                return
+
+            screen_width, screen_height = pyautogui.size()
+
+            # Увеличение перекрытия до 20%
+            overlap_ratio = 0.1  # 20% overlap
+
+            current_lat = top_left_lat
+
+            while current_lat > bottom_right_lat:
+                current_lon = top_left_lon
+                meters_per_pixel = self.get_meters_per_pixel(current_lat, self.current_zoom)
+
+                # Уменьшенный шаг с увеличенным перекрытием
+                step_lon = (meters_per_pixel * screen_width / (111320 * math.cos(math.radians(current_lat)))) * (
+                            1 - overlap_ratio)
+                step_lat = (meters_per_pixel * screen_height / 110540) * (1 - overlap_ratio)
+
+                while current_lon < bottom_right_lon:
+                    # Проверка, не был ли уже посещён этот участок
+                    position_key = (round(current_lat, 7), round(current_lon, 7))
+                    if position_key not in visited_positions:
+                        self.move_to_and_capture(current_lat, current_lon, save_path)
+                        visited_positions.add(position_key)
+                    else:
+                        self.log(f"Skipping duplicate position at latitude: {current_lat}, longitude: {current_lon}")
+                    current_lon += step_lon
+
+                current_lat -= step_lat
+
+        except Exception as e:
+            self.log(f"Error capturing houses: {e}")
+            self.show_popup("Error", f"Error capturing houses: {e}")
 
     def move_to_and_capture(self, latitude, longitude, save_path):
+        """
+        Перемещение по карте и захват скриншотов с последующим обнаружением домов.
+        """
         try:
             meters_per_pixel = self.get_meters_per_pixel(latitude, self.current_zoom)
 
@@ -250,136 +445,87 @@ class ScreenshotApp(QMainWindow):
             self.driver.save_screenshot(filename)
             self.log(f"Screenshot saved: {filename}")
 
+            # Детектирование домов на карте
             house_coords_on_image = self.detect_houses_on_map(
                 filename, latitude, longitude, meters_per_pixel
             )
 
             for house_lat, house_lon in house_coords_on_image:
-                if not self.is_duplicate(house_lat, house_lon, self.house_coordinates):
+                # Проверяем на дубликаты перед добавлением в список
+                if not self.is_duplicate(house_lat, house_lon, self.house_coordinates, meters_per_pixel):
                     self.house_coordinates.append((house_lat, house_lon))
+                    self.log(f"Added house at {house_lat}, {house_lon}")
+                else:
+                    self.log(f"Skipped duplicate house at coordinates: {house_lat}, {house_lon}")
 
         except Exception as e:
             self.log(f"Error taking screenshot: {e}")
-            self.show_popup("Ошибка", f"Ошибка при создании скриншота: {e}")
+            self.show_popup("Error", f"Error taking screenshot: {e}")
+    def is_duplicate(self, new_lat, new_lon, house_coordinates, meters_per_pixel):
+        """
+        Проверка на дубликаты координат домов.
+        Если расстояние до уже сохранённого дома меньше допустимого (1 метр), то считаем его дубликатом.
+        """
+        allowed_distance = 3.0  # Установим допустимое расстояние для дубликатов в 2 метра
 
-    def detect_houses_on_map(self, image_path, latitude, longitude, meters_per_pixel):
-        image = cv2.imread(image_path)
-        if image is None:
-            self.log(f"Error loading image {image_path}")
-            return []
+        for lat, lon in house_coordinates:
+            distance = self.calculate_distance(new_lat, new_lon, lat, lon)
+            if distance < allowed_distance:
+                return True
 
-        # Get image dimensions
-        height, width, _ = image.shape
+        return False
 
-        # Target color in BGR
-        target_color_bgr = self.target_color  # Это numpy массив со значениями [237, 233, 232]
-
-        # Tolerance in color values (set tolerance to 5 to highlight similar colors)
-        tolerance = 5
-        lower_bound = np.clip(target_color_bgr - tolerance, 0, 255)
-        upper_bound = np.clip(target_color_bgr + tolerance, 0, 255)
-
-        # Create mask with tolerance
-        mask = cv2.inRange(image, lower_bound, upper_bound)
-
-        # Save mask for debugging
-        mask_filename = image_path.replace('.png', '_mask.png')
-        cv2.imwrite(mask_filename, mask)
-        self.log(f"Mask saved: {mask_filename}")
-
-        # Perform morphological closing to bridge small gaps or lines between houses
-        kernel_size = 5  # Увеличили размер ядра для объединения домов, разделенных до 1.5 пикселя
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-        closed_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-        # Save the closed mask for debugging
-        closed_mask_filename = image_path.replace('.png', '_closed_mask.png')
-        cv2.imwrite(closed_mask_filename, closed_mask)
-        self.log(f"Closed mask saved: {closed_mask_filename}")
-
-        # Use connectedComponentsWithStats to find connected regions
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(closed_mask, connectivity=8)
-        self.log(f"Found {num_labels - 1} connected components")
-
-        # Save labeled image for debugging
-        label_hue = np.uint8(179 * labels / np.max(labels))
-        blank_ch = 255 * np.ones_like(label_hue)
-        labeled_img = cv2.merge([label_hue, blank_ch, blank_ch])
-        labeled_img = cv2.cvtColor(labeled_img, cv2.COLOR_HSV2BGR)
-        labeled_img[label_hue == 0] = 0
-
-        labeled_filename = image_path.replace('.png', '_labeled.png')
-        cv2.imwrite(labeled_filename, labeled_img)
-        self.log(f"Labeled image saved: {labeled_filename}")
-
-        house_coordinates = []
-
-        for label in range(1, num_labels):
-            area = stats[label, cv2.CC_STAT_AREA]
-            if 100 < area < 10000:
-                cx, cy = centroids[label]
-                dx_pixels = cx - (width / 2)
-                dy_pixels = cy - (height / 2)
-
-                dx_meters = dx_pixels * meters_per_pixel
-                dy_meters = dy_pixels * meters_per_pixel
-
-                delta_lat = -dy_meters / 110540  # 1 градус широты ~110.54 км
-                delta_lon = dx_meters / (111320 * math.cos(math.radians(latitude)))
-
-                house_lat = latitude + delta_lat
-                house_lon = longitude + delta_lon
-
-                # Добавляем координаты дома
-                house_coordinates.append((house_lat, house_lon))
-
-        return house_coordinates
-
-    def capture_all_houses(self, save_path):
+    def mark_houses(self, csv_folder, excel_folder, save_path):
         try:
-            self.house_coordinates = []
-            visited_positions = set()
+            village_name = self.village_input.text().strip()
 
-            top_left_lat, top_left_lon = self.parse_coords(self.top_left_coords)
-            bottom_right_lat, bottom_right_lon = self.parse_coords(self.bottom_right_coords)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            screen_width, screen_height = pyautogui.size()
+            # Convert house coordinates to NumPy array for clustering
+            coords = np.array(self.house_coordinates)
 
-            current_lat = top_left_lat
+            if len(coords) == 0:
+                self.log("No houses detected to mark.")
+                self.show_completion_dialog(
+                    "Process Completed",
+                    f"No houses detected.Documents\\MapsMarkup\\{self.prefix_input.text().strip()}\\{village_name}"
+                )
+                return
 
-            while current_lat > bottom_right_lat:
-                current_lon = top_left_lon
-                meters_per_pixel = self.get_meters_per_pixel(current_lat, self.current_zoom)
+            # Perform DBSCAN clustering
+            # Epsilon is set to 5 meters; adjust if necessary
+            epsilon = 5 / 6371000  # Convert 5 meters to radians
 
-                # Вычисляем шаги с учетом текущей широты
-                step_lon = (meters_per_pixel * screen_width / (111320 * math.cos(math.radians(current_lat))))
-                step_lat = (meters_per_pixel * screen_height / 110540)
+            # Convert latitude and longitude to radians for geospatial clustering
+            coords_rad = np.radians(coords)
 
-                while current_lon < bottom_right_lon:
-                    # Округляем координаты до 6 знаков после запятой для проверки на дубликаты позиций
-                    position_key = (round(current_lat, 6), round(current_lon, 6))
-                    if position_key not in visited_positions:
-                        self.move_to_and_capture(current_lat, current_lon, save_path)
-                        visited_positions.add(position_key)
-                    else:
-                        self.log(f"Skipping duplicate position at lat: {current_lat}, lon: {current_lon}")
-                    current_lon += step_lon
+            # Define DBSCAN with Haversine metric
+            db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(coords_rad)
+            labels = db.labels_
 
-                current_lat -= step_lat
+            unique_labels = set(labels)
+            clustered_coords = []
 
-        except Exception as e:
-            self.log(f"Error during house capture: {e}")
-            self.show_popup("Ошибка", f"Ошибка при захвате домов: {e}")
+            for label in unique_labels:
+                class_member_mask = (labels == label)
+                cluster = coords[class_member_mask]
+                centroid = cluster.mean(axis=0)
+                clustered_coords.append((centroid[0], centroid[1]))
 
-    def mark_houses(self, csv_folder, excel_folder):
-        try:
-            csv_filename = os.path.join(csv_folder, 'houses.csv')
+            self.log(
+                f"Clustering reduced {len(self.house_coordinates)} houses to {len(clustered_coords)} unique houses.")
+
+            # Sort coordinates by latitude (LAT)
+            sorted_coordinates = sorted(clustered_coords, key=lambda coord: coord[0])
+
+            csv_filename = os.path.join(csv_folder, f'{village_name}_{timestamp}.csv')
             with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = ['Marker', 'Latitude', 'Longitude']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
-                for idx, (lat, lon) in enumerate(self.house_coordinates, start=1):
-                    # Формируем маркер в формате CM001, CM002 и т.д.
+
+                # Assign markers to sorted coordinates
+                for idx, (lat, lon) in enumerate(sorted_coordinates, start=1):
                     marker = f"{self.prefix_input.text().strip()}{idx:03d}"
                     writer.writerow({
                         'Marker': marker,
@@ -387,25 +533,40 @@ class ScreenshotApp(QMainWindow):
                         'Longitude': f"{lon:.14f}"
                     })
 
+            # Read CSV file and convert to Excel
             df = pd.read_csv(csv_filename)
-            excel_filename = os.path.join(excel_folder, 'houses.xlsx')
+            excel_filename = os.path.join(excel_folder, f'{village_name}_{timestamp}.xlsx')
             df.to_excel(excel_filename, index=False)
 
-            self.log(f"Houses marked and saved to {csv_filename} and {excel_filename}")
+            self.log(f"Houses marked and saved in {csv_filename} and {excel_filename}")
 
-            # Добавляем уведомление об окончании процесса
-            self.show_completion_dialog("Процесс завершен", "Процесс успешно завершен. Файлы сохранены.")
+            # Display completion dialog
+            self.show_completion_dialog(
+                "Process Completed",
+                f"Process completed.Documents\\MapsMarkup\\{self.prefix_input.text().strip()}\\{village_name}"
+            )
 
         except Exception as e:
             self.log(f"Error marking houses: {e}")
-            self.show_popup("Ошибка", f"Ошибка при сохранении домов: {e}")
+            self.show_popup("Error", f"Error saving houses: {e}")
+
+    def delete_images(self, directory):
+        try:
+            for filename in os.listdir(directory):
+                if filename.endswith('.png') or filename.endswith('.jpg') or filename.endswith('.jpeg'):
+                    file_path = os.path.join(directory, filename)
+                    os.remove(file_path)
+                    self.log(f"Deleted image file: {file_path}")
+        except Exception as e:
+            self.log(f"Error deleting images: {e}")
+            self.show_popup("Error", f"Error deleting images: {e}")
 
     def parse_coords(self, coords_str):
         try:
             lat, lon = map(float, coords_str.split(','))
             return lat, lon
         except ValueError:
-            self.log(f"Invalid coordinates format: {coords_str}")
+            self.log(f"Invalid coordinate format: {coords_str}")
             return None, None
 
 
@@ -414,18 +575,18 @@ class MainApp(QWidget):
         super().__init__()
 
         self.setWindowTitle("Screenshot Application")
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 300, 200)
 
         self.log_widget = QTextEdit()
         self.log_widget.setReadOnly(True)
 
         self.prefix_input = QLineEdit()
-        self.prefix_input.setPlaceholderText("Enter code")
+        self.prefix_input.setPlaceholderText("Enter Code")
 
         self.village_input = QLineEdit()
-        self.village_input.setPlaceholderText("Enter village name")
+        self.village_input.setPlaceholderText("Enter Village Name")
 
-        self.submit_button = QPushButton("Submit")
+        self.submit_button = QPushButton("Start")
         self.submit_button.clicked.connect(self.start_screenshot)
 
         layout = QVBoxLayout()
