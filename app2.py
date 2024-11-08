@@ -269,8 +269,9 @@ class ScreenshotApp(QMainWindow):
 
     def detect_houses_on_map(self, image_path, latitude, longitude, meters_per_pixel):
         """
-        Process the image to detect houses and mark them with improved sensitivity.
+        Process the image to detect houses and mark them.
         """
+        # Load the image
         image = cv2.imread(image_path)
         if image is None:
             self.log(f"Error loading image {image_path}")
@@ -278,91 +279,76 @@ class ScreenshotApp(QMainWindow):
 
         height, width, _ = image.shape
 
-        # Debug logging for image dimensions
-        self.log(f"Image loaded with dimensions: {width}x{height}")
-
         # Save the original image for verification
-        original_image_path = image_path.replace(".png", "_step1_original.png")
+        base_name, ext = os.path.splitext(image_path)
+        original_image_path = f"{base_name}_original{ext}"
         cv2.imwrite(original_image_path, image)
 
         # Define color tolerance
-        tolerance = 10  # Increased tolerance for better detection
+        tolerance = 10
         lower_bound = np.clip(self.target_color - tolerance, 0, 255)
         upper_bound = np.clip(self.target_color + tolerance, 0, 255)
 
         # Create a mask for the target color
         mask = cv2.inRange(image, lower_bound, upper_bound)
-        self.log(f"Mask created with bounds: lower={lower_bound}, upper={upper_bound}")
 
         # Apply morphological operations to clean the mask
-        kernel_size = 3  # Adjust if needed for sensitivity
+        kernel_size = 3
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
         opened_mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         closed_mask = cv2.morphologyEx(opened_mask, cv2.MORPH_CLOSE, kernel)
 
         # Find contours in the mask
         contours, _ = cv2.findContours(closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        self.log(f"Contours detected: {len(contours)}")
 
         house_coordinates = []
 
         # Thresholds for filtering
-        small_house_threshold = 200  # Reduced threshold to capture smaller houses
-        large_house_threshold = 1500  # Threshold for residential houses
+        small_house_threshold = 200
+        large_house_threshold = 1500
 
-        # For visualization
-        houses_colored_image = np.zeros_like(image)
+        # Create a black image for visualization
+        processed_image = np.zeros_like(image)
 
         for contour in contours:
             epsilon = 0.02 * cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, epsilon, True)
 
-            if len(approx) >= 4:  # Include polygons with 4 or more vertices
+            if len(approx) >= 4:
                 area = cv2.contourArea(approx)
 
-                # Logging for each detected contour's area
-                self.log(f"Contour area: {area}")
-
-                # Filtering based on area
                 if area > small_house_threshold:
+                    M = cv2.moments(contour)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+
+                        dx_pixels = cx - (width / 2)
+                        dy_pixels = cy - (height / 2)
+
+                        dx_meters = dx_pixels * meters_per_pixel
+                        dy_meters = dy_pixels * meters_per_pixel
+
+                        delta_lat = -dy_meters / 110540
+                        delta_lon = dx_meters / (111320 * math.cos(math.radians(latitude)))
+
+                        house_lat = latitude + delta_lat
+                        house_lon = longitude + delta_lon
+
+                        # Add house coordinates to the list
+                        house_coordinates.append((house_lat, house_lon))
+
+                    # Color houses based on size
                     if area >= large_house_threshold:
-                        # Mark house in red
-                        cv2.drawContours(houses_colored_image, [contour], -1, (0, 0, 255), cv2.FILLED)
-
-                        # Calculate the center of the house
-                        M = cv2.moments(contour)
-                        if M["m00"] != 0:
-                            cx = int(M["m10"] / M["m00"])
-                            cy = int(M["m01"] / M["m00"])
-
-                            dx_pixels = cx - (width / 2)
-                            dy_pixels = cy - (height / 2)
-
-                            dx_meters = dx_pixels * meters_per_pixel
-                            dy_meters = dy_pixels * meters_per_pixel
-
-                            delta_lat = -dy_meters / 110540
-                            delta_lon = dx_meters / (111320 * math.cos(math.radians(latitude)))
-
-                            house_lat = latitude + delta_lat
-                            house_lon = longitude + delta_lon
-
-                            # Add house coordinates to the list
-                            house_coordinates.append((house_lat, house_lon))
-                            self.log(f"Marked house at {house_lat}, {house_lon}")
+                        # Residential houses in red
+                        cv2.drawContours(processed_image, [contour], -1, (0, 0, 255), cv2.FILLED)
                     else:
-                        # Mark house in green (smaller than large threshold but larger than shed)
-                        cv2.drawContours(houses_colored_image, [contour], -1, (0, 255, 0), cv2.FILLED)
-                else:
-                    self.log(f"Excluded house with area: {area} (too small)")
-            else:
-                self.log(f"Excluded contour with {len(approx)} vertices (less than 4)")
+                        # Smaller houses (sheds) in green
+                        cv2.drawContours(processed_image, [contour], -1, (0, 255, 0), cv2.FILLED)
 
-        # Save the image with marked houses
-        colored_houses_path = image_path.replace(".png", "_colored_houses_filtered.png")
-        cv2.imwrite(colored_houses_path, houses_colored_image)
-
-        self.log(f"Total houses marked: {len(house_coordinates)}")
+        # Save the processed image
+        processed_image_path = f"{base_name}_processed{ext}"
+        cv2.imwrite(processed_image_path, processed_image)
 
         return house_coordinates
 
@@ -476,6 +462,83 @@ class ScreenshotApp(QMainWindow):
         return False
 
     def mark_houses(self, csv_folder, excel_folder, save_path):
+        try:
+            village_name = self.village_input.text().strip()
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Convert house coordinates to NumPy array for clustering
+            coords = np.array(self.house_coordinates)
+
+            if len(coords) == 0:
+                self.log("No houses detected to mark.")
+                self.show_completion_dialog(
+                    "Process Completed",
+                    f"No houses detected. Documents\\MapsMarkup\\{self.prefix_input.text().strip()}\\{village_name}"
+                )
+                return
+
+            # Perform DBSCAN clustering
+            epsilon = 5 / 6371000  # Convert 5 meters to radians
+
+            # Convert latitude and longitude to radians for geospatial clustering
+            coords_rad = np.radians(coords)
+
+            # Define DBSCAN with Haversine metric
+            db = DBSCAN(eps=epsilon, min_samples=1, algorithm='ball_tree', metric='haversine').fit(coords_rad)
+            labels = db.labels_
+
+            unique_labels = set(labels)
+            clustered_coords = []
+
+            for label in unique_labels:
+                class_member_mask = (labels == label)
+                cluster = coords[class_member_mask]
+                centroid = cluster.mean(axis=0)
+                clustered_coords.append((centroid[0], centroid[1]))
+
+            self.log(
+                f"Clustering reduced {len(self.house_coordinates)} houses to {len(clustered_coords)} unique houses."
+            )
+
+            # Sort coordinates by latitude (LAT)
+            sorted_coordinates = sorted(clustered_coords, key=lambda coord: coord[0])
+
+            csv_filename = os.path.join(csv_folder, f'{village_name}_{timestamp}.csv')
+            with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['Marker', 'Latitude', 'Longitude']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                # Assign markers to sorted coordinates
+                for idx, (lat, lon) in enumerate(sorted_coordinates, start=1):
+                    marker = f"{self.prefix_input.text().strip()}{idx:03d}"
+                    writer.writerow({
+                        'Marker': marker,
+                        'Latitude': f"{lat:.14f}",
+                        'Longitude': f"{lon:.14f}"
+                    })
+
+            # Read CSV file and convert to Excel
+            df = pd.read_csv(csv_filename)
+            excel_filename = os.path.join(excel_folder, f'{village_name}_{timestamp}.xlsx')
+            df.to_excel(excel_filename, index=False)
+
+            self.log(f"Houses marked and saved in {csv_filename} and {excel_filename}")
+
+            # Delete images to save disk space
+            self.delete_images(save_path)
+
+            # Display completion dialog
+            self.show_completion_dialog(
+                "Process Completed",
+                f"Process completed. Documents\\MapsMarkup\\{self.prefix_input.text().strip()}\\{village_name}"
+            )
+
+        except Exception as e:
+            self.log(f"Error marking houses: {e}")
+            self.show_popup("Error", f"Error saving houses: {e}")
+
         try:
             village_name = self.village_input.text().strip()
 
